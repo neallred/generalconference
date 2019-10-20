@@ -89,7 +89,7 @@ def write_talks_list(talks_list):
 
 # These special characters appear in talk titles:
 # ["!", "&", "(", ")", "*", ",", "-", ".", ":", ";", "?", "[", "]", " ", "—", "’", "“", "”", "…" ]
-# The thing that looks like a space is "\x0a", a non breaking space
+# The thing that looks like a space is "\xa0", a non breaking space
 allowed_filename_characters = re.compile("[^A-Za-z0-9 ,-]")
 def write_talk_text(talk, failed_talks):
     try:
