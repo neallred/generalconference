@@ -145,3 +145,7 @@ dmypy.json
 conferences/
 !conferences/.gitkeep
 tmp/
+
+
+/target
+**/*.rs.bk
