@@ -9,14 +9,15 @@ import (
 	"strings"
 
 	"github.com/antchfx/htmlquery"
+	"golang.org/x/net/html"
 )
 
 const language = "eng"
 const domain = "https://www.churchofjesuschrist.org"
 const index_container_selector = "section .section-wrapper"
-const document_directory = "conferences"
+const conferencesDir = "conferences"
 
-var index_link = fmt.Sprintf("%s/general-conference/conferences?lang=%s", domain, language)
+var indexLink = fmt.Sprintf("%s/general-conference/conferences?lang=%s", domain, language)
 
 func slugToUrl(slug string) string {
 	return fmt.Sprintf("%s%s", domain, slug)
@@ -66,7 +67,7 @@ func makeDownloadTarget(stepLabel string) {
 
 	homedir, err := os.UserHomeDir()
 	quitOnErr(err, "Failed to find home directory")
-	download_target := fmt.Sprintf("%s/%s", homedir, document_directory)
+	download_target := fmt.Sprintf("%s/%s", homedir, conferencesDir)
 
 	err = os.MkdirAll(download_target, os.ModePerm)
 	quitOnErr(err, fmt.Sprintf("Failed to make download directory: \"%s\"", download_target))
@@ -82,7 +83,7 @@ func gatherConferences(stepLabel string) []conference {
 
 	var conferences []conference
 
-	doc, err := htmlquery.LoadURL(index_link)
+	doc, err := htmlquery.LoadURL(indexLink)
 	quitOnErr(err, "Unable to load General Conferences index page")
 	conference_links, err := htmlquery.QueryAll(doc, "//a")
 	quitOnErr(err, "Failed to find conference links on index page")
@@ -107,120 +108,117 @@ func gatherConferences(stepLabel string) []conference {
 		}
 	}
 
-	fmt.Printf("Gathered %d conferences\n", len(conferences))
-
 	return conferences
+}
+
+func summarizeTalk(markup *html.Node) talk {
+	var talk_link string
+	for _, attr := range markup.Attr {
+		if attr.Key == "href" {
+			talk_link = slugToUrl(attr.Val)
+		}
+	}
+
+	author, author_err := htmlquery.Query(markup, "//div[contains(@class, 'lumen-tile__content')]/text()")
+	talk_title, title_err := htmlquery.Query(markup, "//div[contains(@class, 'lumen-tile__title')]/div/text()")
+
+	var effective_author string
+	if author_err != nil || author == nil {
+		fmt.Println("unknown author:", author_err, author, markup)
+		effective_author = "unknown"
+	} else {
+		effective_author = author.Data
+	}
+
+	var effective_title string
+	if title_err != nil || talk_title == nil {
+		// Hackery because a handful of talks have a slightly different html structure
+		talk_title, title_err = htmlquery.Query(markup, "//div[contains(@class, 'lumen-tile__title')]/text()")
+		if title_err != nil || talk_title == nil {
+			fmt.Println("unknown title:", title_err, talk_title, talk_link)
+			effective_title = "unknown"
+		}
+	} else {
+		effective_title = talk_title.Data
+	}
+
+	return talk{effective_title, effective_author, talk_link, author_err}
+}
+
+func addConferenceTalks(conf conference, out chan<- *conference) {
+	doc, err := htmlquery.LoadURL(conf.link)
+	if err != nil {
+		log.Println("err on conference page")
+		log.Println(err)
+	}
+
+	sessions_container, err := htmlquery.Query(doc, "//div[contains(@class,'section-wrapper')]")
+	quitOnErr(err, "Unable to find element expected to wrap all sessions")
+	session_markups, err := htmlquery.QueryAll(sessions_container, "//div[contains(@class,'section tile-wrapper')]")
+	quitOnErr(err, "Unable to find session div")
+
+	for _, session_markup := range session_markups {
+		title, err := htmlquery.Query(session_markup, "//span[contains(@class,'section__header__title')]/text()")
+		talks_markup, err := htmlquery.QueryAll(session_markup, "//a[contains(@class,'lumen-tile__link')]")
+
+		var talks []talk
+		for _, markup := range talks_markup {
+			talks = append(talks, summarizeTalk(markup))
+		}
+		conf.sessions = append(conf.sessions, session{title.Data, talks, nil})
+
+		if err != nil {
+			log.Println("session_title err")
+			log.Println(err)
+		}
+
+	}
+
+	out <- &conf
+}
+
+func downloadConference(conf *conference) {
+	fmt.Println("bootstrap year and month folders")
+	fmt.Println("for each session")
+	fmt.Println("-- make folder")
+	fmt.Println("-- for each talk")
+	fmt.Println("---- download talk")
+	fmt.Println("---- parse text")
+	fmt.Println("---- write to file")
 }
 
 func main() {
 	makeDownloadTarget("Making download folder")
 	conferences := gatherConferences("Gathering conference links")
 
-	sessionsChan := make(chan *conference)
+	chScoutConferences := make(chan *conference, 20)
+	// chDownloadConferences := make(chan *conference, 20)
 
 	defer func() {
-		close(sessionsChan)
+		close(chScoutConferences)
 	}()
 
-	for i, conf := range conferences {
-
-		// start a go routine with the index and url in a closure
-		go func(i int, conf conference) {
-
-			// this sends an empty struct into the semaphoreChan which
-			// is basically saying add one to the limit, but when the
-			// limit has been reached block until there is room
-			// semaphoreChan <- struct{}{}
-
-			// send the request and put the response in a result struct
-			// along with the index so we can sort them later along with
-			// any error that might have occoured
-
-			doc, err := htmlquery.LoadURL(conf.link)
-			if err != nil {
-				log.Println("err on conference page")
-				log.Println(err)
-			}
-
-			sessions_container, err := htmlquery.Query(doc, "//div[contains(@class,'section-wrapper')]")
-			quitOnErr(err, "Unable to find element expected to wrap all sessions: //div[contains(@class,'section-wrapper')]")
-			session_markups, err := htmlquery.QueryAll(sessions_container, "//div[contains(@class,'section tile-wrapper')]")
-			quitOnErr(err, "Unable to find expected session div: //div[contains(@class,'section tile-wrapper')]")
-
-			log.Println("session_html greppins:")
-			for _, session_markup := range session_markups {
-				title, err := htmlquery.Query(session_markup, "//span[contains(@class,'section__header__title')]/text()")
-				talks_markup, err := htmlquery.QueryAll(session_markup, "//a[@href]")
-				var talks []talk
-
-				for _, talk_markup := range talks_markup {
-					var talk_link string
-					for _, attr := range talk_markup.Attr {
-						if attr.Key == "href" {
-							talk_link = slugToUrl(attr.Val)
-						}
-					}
-
-					author, author_err := htmlquery.Query(talk_markup, "//div[contains(@class, 'lumen-tile__content')]/text()")
-					talk_title, title_err := htmlquery.Query(talk_markup, "//div[contains(@class, 'lumen-tile__title')]/div/text()")
-
-					var effective_author string
-					if author_err != nil || author == nil {
-						effective_author = "unknown"
-					} else {
-						effective_author = author.Data
-					}
-
-					var effective_title string
-					if title_err != nil || talk_title == nil {
-						effective_title = "unknown"
-					} else {
-						effective_title = talk_title.Data
-					}
-
-					talk := talk{effective_title, effective_author, talk_link, err}
-					talks = append(talks, talk)
-				}
-				conf.sessions = append(conf.sessions, session{title.Data, talks, nil})
-				fmt.Println(conf)
-
-				// session_title = title.Data
-				log.Println("session_title")
-				log.Println(title.Data)
-				if err != nil {
-					log.Println("session_title err")
-					log.Println(err)
-				}
-
-			}
-			// log.Println(conf.link)
-
-			// now we can send the result struct through the sessionsChan
-			sessionsChan <- &conf
-
-			// once we're done it's we read from the semaphoreChan which
-			// has the effect of removing one from the limit and allowing
-			// another goroutine to start
-			// <-semaphoreChan
-
-		}(i, conf)
-
+	for _, conf := range conferences {
+		conf := conf
+		go addConferenceTalks(conf, chScoutConferences)
 	}
 
-	// start listening for any results over the resultsChan
-	// once we get a result append it to the result slice
-	var results []conference
-	for {
-		result := <-sessionsChan
-		results = append(results, *result)
-		fmt.Println("result received")
-		fmt.Println(*result)
+	conferencesCounter := 0
+	for conf := range chScoutConferences {
+		numTalks := 0
+		for _, session := range conf.sessions {
+			numTalks += len(session.talks)
+		}
+		fmt.Printf("%s: %d sessions, %d talks\n", conf.title, len(conf.sessions), numTalks)
+		downloadConference(conf)
+		conferencesCounter++
+		// chDownloadConferences := make(chan *conference, 20)
 
-		// if we've reached the expected amount of urls then stop
-		// if len(results) == len(urls) {
-		// 	break
-		// }
+		allConferencesRead := len(conferences) == conferencesCounter
+		if allConferencesRead {
+			break
+		}
 	}
 
-	// fmt.Println(conferences)
+	fmt.Println("Conferences downloaded.")
 }
