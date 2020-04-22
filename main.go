@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -76,41 +77,31 @@ func makeDownloadTarget(stepLabel string) {
 	fmt.Printf("Made %s\n", downloadTarget)
 }
 
-func trim(x string) string {
-	return strings.Trim(x, "	\n")
-}
-
 func gatherConferences(stepLabel string) []conference {
 	logStep(stepLabel)
 
 	var conferences []conference
 
-	doc, err := htmlquery.LoadURL(indexLink)
-
+	resp, err := http.Get(indexLink)
 	quitOnErr(err, "Unable to load General Conferences index page")
-	conference_links, err := htmlquery.QueryAll(doc, "//a")
-	quitOnErr(err, "Failed to find conference links on index page")
+	defer resp.Body.Close()
 
-	for _, a := range conference_links {
-		var href string
-		var class string
-		for _, attr := range a.Attr {
-			if attr.Key == "class" {
-				class = attr.Val
-			}
-			if attr.Key == "href" {
-				href = attr.Val
-			}
-		}
-		if class == "year-line__link" && href != "" {
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	quitOnErr(err, "Unable parse General Conferences index page")
+
+	quitOnErr(err, "Failed to find conference links on index page")
+	doc.Find("a[href].year-line__link").Each(func(_ int, a *goquery.Selection) {
+		href, _ := a.Attr("href")
+		link := slugToUrl(href)
+		title := strings.TrimSpace(a.Text())
+		if strings.Contains(href, "/general-conference/") {
 			var sessions []session
-			conference_link := slugToUrl(href)
-			title := strings.TrimSpace(a.FirstChild.Data)
-			conf := conference{conference_link, title, sessions, nil}
+			conf := conference{link, title, sessions, nil}
 			conferences = append(conferences, conf)
 		}
-	}
+	})
 
+	fmt.Printf("Found %d conferences \n", len(conferences))
 	return conferences
 }
 
@@ -146,6 +137,17 @@ func summarizeTalk(markup *html.Node) talk {
 	}
 
 	return talk{effective_title, effective_author, talk_link, author_err}
+}
+
+var nonFileChars = regexp.MustCompile(`[^A-Za-z0-9 ]`)
+var spaceChars = regexp.MustCompile(" +")
+var dashes = regexp.MustCompile("-+")
+
+func toFileName(str string) string {
+	toSpaces := nonFileChars.ReplaceAll([]byte(str), []byte(" "))
+	toDashes := spaceChars.ReplaceAll(toSpaces, []byte("-"))
+	trimmedDashes := dashes.ReplaceAll(toDashes, []byte("-"))
+	return strings.ToLower(strings.Trim(strings.TrimSpace(string(trimmedDashes)), "-"))
 }
 
 func addConferenceTalks(conf conference, out chan<- *conference) {
@@ -211,22 +213,30 @@ func downloadConference(conf *conference, dlTarget string) {
 	quitOnErr(err, fmt.Sprintf("Failed to make conference directory: \"%s\"", confPath))
 
 	for _, session := range conf.sessions {
-		sessPath := fmt.Sprintf("%s/%s", confPath, session.title)
+		sessPath := fmt.Sprintf("%s/%s", confPath, toFileName(session.title))
 		err := os.MkdirAll(sessPath, os.ModePerm)
 		quitOnErr(err, fmt.Sprintf("Failed to make session directory: \"%s\"", sessPath))
 		for _, talk := range session.talks {
-			talkPath := fmt.Sprintf("%s/%s", sessPath, talk.title)
-			fmt.Println(talk.title)
+			talkPath := fmt.Sprintf("%s/%s", sessPath, toFileName(talk.title))
+			fmt.Println(talkPath)
 
-			doc, err := htmlquery.LoadURL(talk.link)
-			quitOnErr(err, "Unable to load talk", talk.link)
-			goqueryDoc := goquery.NewDocumentFromNode(doc)
+			resp, err := http.Get(talk.link)
+			defer resp.Body.Close()
+			quitOnErr(err, "Unable to load talk "+talk.link)
+			goqueryDoc, err := goquery.NewDocumentFromReader(resp.Body)
+			quitOnErr(err, "Unable to load document "+talk.link)
 			article := goqueryDoc.Find("article")
-			articleText := article.Text()
+			articleText := article.Contents().Text()
 			ioutil.WriteFile(talkPath, []byte(articleText), 0644)
 		}
 	}
 }
+
+// TODO:
+// Consolidate html library usage
+// need a good html element text grabber
+// need to parallelize file downloading
+// need a function to standardize talk names, remove smart quotes and such
 
 func main() {
 	makeDownloadTarget("Making download folder")
