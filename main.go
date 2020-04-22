@@ -217,7 +217,7 @@ func downloadConference(conf *conference, dlTarget string) {
 		err := os.MkdirAll(sessPath, os.ModePerm)
 		quitOnErr(err, fmt.Sprintf("Failed to make session directory: \"%s\"", sessPath))
 		for _, talk := range session.talks {
-			talkPath := fmt.Sprintf("%s/%s", sessPath, toFileName(talk.title))
+			talkPath := fmt.Sprintf("%s/%s.txt", sessPath, toFileName(talk.title))
 			fmt.Println(talkPath)
 
 			resp, err := http.Get(talk.link)
