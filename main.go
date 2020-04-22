@@ -2,12 +2,14 @@ package main
 
 import (
 	"fmt"
-	// "io/ioutil"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/antchfx/htmlquery"
 	"golang.org/x/net/html"
 )
@@ -53,10 +55,10 @@ func logStep(x string) {
 	fmt.Println(x)
 }
 
-func quitOnErr(err error, extra_message string) {
+func quitOnErr(err error, msgs ...string) {
 	if err != nil {
-		if extra_message != "" {
-			log.Println(extra_message)
+		for _, msg := range msgs {
+			log.Println(msg)
 		}
 		log.Fatal(err)
 	}
@@ -67,11 +69,11 @@ func makeDownloadTarget(stepLabel string) {
 
 	homedir, err := os.UserHomeDir()
 	quitOnErr(err, "Failed to find home directory")
-	download_target := fmt.Sprintf("%s/%s", homedir, conferencesDir)
+	downloadTarget := fmt.Sprintf("%s/%s", homedir, conferencesDir)
 
-	err = os.MkdirAll(download_target, os.ModePerm)
-	quitOnErr(err, fmt.Sprintf("Failed to make download directory: \"%s\"", download_target))
-	fmt.Printf("Made %s\n", download_target)
+	err = os.MkdirAll(downloadTarget, os.ModePerm)
+	quitOnErr(err, fmt.Sprintf("Failed to make download directory: \"%s\"", downloadTarget))
+	fmt.Printf("Made %s\n", downloadTarget)
 }
 
 func trim(x string) string {
@@ -84,6 +86,7 @@ func gatherConferences(stepLabel string) []conference {
 	var conferences []conference
 
 	doc, err := htmlquery.LoadURL(indexLink)
+
 	quitOnErr(err, "Unable to load General Conferences index page")
 	conference_links, err := htmlquery.QueryAll(doc, "//a")
 	quitOnErr(err, "Failed to find conference links on index page")
@@ -102,7 +105,7 @@ func gatherConferences(stepLabel string) []conference {
 		if class == "year-line__link" && href != "" {
 			var sessions []session
 			conference_link := slugToUrl(href)
-			title := trim(a.FirstChild.Data)
+			title := strings.TrimSpace(a.FirstChild.Data)
 			conf := conference{conference_link, title, sessions, nil}
 			conferences = append(conferences, conf)
 		}
@@ -177,21 +180,59 @@ func addConferenceTalks(conf conference, out chan<- *conference) {
 	out <- &conf
 }
 
-func downloadConference(conf *conference) {
-	fmt.Println("bootstrap year and month folders")
-	fmt.Println("for each session")
-	fmt.Println("-- make folder")
-	fmt.Println("-- for each talk")
-	fmt.Println("---- download talk")
-	fmt.Println("---- parse text")
-	fmt.Println("---- write to file")
+// yr, mth, ok
+func getConferenceFolders(confLink string) (string, string, bool) {
+	parsed, err := url.Parse(confLink)
+	if err != nil {
+		return "", "", false
+	}
+	path := strings.Split(parsed.Path, "/")
+	if len(path) < 2 {
+		return "", "", false
+	}
+	dates := path[len(path)-2:]
+
+	yr := dates[0]
+	mth := dates[1]
+	ok := true
+
+	return yr, mth, ok
+}
+
+func downloadConference(conf *conference, dlTarget string) {
+	// bootstrap year and month folders
+	confLink := conf.link
+	yr, mth, ok := getConferenceFolders(confLink)
+	if !ok {
+		fmt.Println("failed to parse conference link for year and month")
+	}
+	confPath := fmt.Sprintf("%s/%s/%s", dlTarget, yr, mth)
+	err := os.MkdirAll(confPath, os.ModePerm)
+	quitOnErr(err, fmt.Sprintf("Failed to make conference directory: \"%s\"", confPath))
+
+	for _, session := range conf.sessions {
+		sessPath := fmt.Sprintf("%s/%s", confPath, session.title)
+		err := os.MkdirAll(sessPath, os.ModePerm)
+		quitOnErr(err, fmt.Sprintf("Failed to make session directory: \"%s\"", sessPath))
+		for _, talk := range session.talks {
+			talkPath := fmt.Sprintf("%s/%s", sessPath, talk.title)
+			fmt.Println(talk.title)
+
+			doc, err := htmlquery.LoadURL(talk.link)
+			quitOnErr(err, "Unable to load talk", talk.link)
+			goqueryDoc := goquery.NewDocumentFromNode(doc)
+			article := goqueryDoc.Find("article")
+			articleText := article.Text()
+			ioutil.WriteFile(talkPath, []byte(articleText), 0644)
+		}
+	}
 }
 
 func main() {
 	makeDownloadTarget("Making download folder")
 	conferences := gatherConferences("Gathering conference links")
 
-	chScoutConferences := make(chan *conference, 20)
+	chScoutConferences := make(chan *conference, 100)
 	// chDownloadConferences := make(chan *conference, 20)
 
 	defer func() {
@@ -204,13 +245,17 @@ func main() {
 	}
 
 	conferencesCounter := 0
+
+	homedir, err := os.UserHomeDir()
+	quitOnErr(err, "Failed to find home directory")
+	downloadTarget := fmt.Sprintf("%s/%s", homedir, conferencesDir)
 	for conf := range chScoutConferences {
 		numTalks := 0
 		for _, session := range conf.sessions {
 			numTalks += len(session.talks)
 		}
-		fmt.Printf("%s: %d sessions, %d talks\n", conf.title, len(conf.sessions), numTalks)
-		downloadConference(conf)
+		// fmt.Printf("%s: %d sessions, %d talks\n", conf.title, len(conf.sessions), numTalks)
+		downloadConference(conf, downloadTarget)
 		conferencesCounter++
 		// chDownloadConferences := make(chan *conference, 20)
 
