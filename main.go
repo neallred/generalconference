@@ -201,7 +201,27 @@ func getConferenceFolders(confLink string) (string, string, bool) {
 	return yr, mth, ok
 }
 
+func downloadTalk(link, filePath string, out chan<- struct{}) {
+	fmt.Println(filePath)
+	resp, err := http.Get(link)
+	defer resp.Body.Close()
+	quitOnErr(err, "Unable to load talk "+link)
+	goqueryDoc, err := goquery.NewDocumentFromReader(resp.Body)
+	quitOnErr(err, "Unable to load document "+link)
+	article := goqueryDoc.Find("article")
+	articleText := article.Contents().Text()
+	err = ioutil.WriteFile(filePath, []byte(articleText), 0644)
+	quitOnErr(err, "unable to write talk")
+	out <- struct{}{}
+}
+
 func downloadConference(conf *conference, dlTarget string) {
+	chDownloadTalks := make(chan struct{}, 5)
+	talkCount := 0
+	for _, sess := range conf.sessions {
+		talkCount += len(sess.talks)
+	}
+
 	// bootstrap year and month folders
 	confLink := conf.link
 	yr, mth, ok := getConferenceFolders(confLink)
@@ -218,17 +238,13 @@ func downloadConference(conf *conference, dlTarget string) {
 		quitOnErr(err, fmt.Sprintf("Failed to make session directory: \"%s\"", sessPath))
 		for _, talk := range session.talks {
 			talkPath := fmt.Sprintf("%s/%s.txt", sessPath, toFileName(talk.title))
-			fmt.Println(talkPath)
+			go downloadTalk(talk.link, talkPath, chDownloadTalks)
 
-			resp, err := http.Get(talk.link)
-			defer resp.Body.Close()
-			quitOnErr(err, "Unable to load talk "+talk.link)
-			goqueryDoc, err := goquery.NewDocumentFromReader(resp.Body)
-			quitOnErr(err, "Unable to load document "+talk.link)
-			article := goqueryDoc.Find("article")
-			articleText := article.Contents().Text()
-			ioutil.WriteFile(talkPath, []byte(articleText), 0644)
 		}
+	}
+
+	for i := 0; i < talkCount; i++ {
+		<-chDownloadTalks
 	}
 }
 
