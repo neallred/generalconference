@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/antchfx/htmlquery"
-	"golang.org/x/net/html"
 )
 
 type Conference struct {
@@ -107,68 +105,54 @@ func getConferences() []Conference {
 	return conferences
 }
 
-func summarizeTalk(markup *html.Node) Talk {
-	var talk_link string
-	for _, attr := range markup.Attr {
-		if attr.Key == "href" {
-			talk_link = slugToUrl(attr.Val)
-		}
-	}
+func summarizeTalk(markup *goquery.Selection) Talk {
+	href, _ := markup.Attr("href")
+	talk_link := slugToUrl(href)
 
-	author, author_err := htmlquery.Query(markup, "//div[contains(@class, 'lumen-tile__content')]/text()")
-	talk_title, title_err := htmlquery.Query(markup, "//div[contains(@class, 'lumen-tile__title')]/div/text()")
+	author := markup.Find("div.lumen-tile__content").Text()
+	talk_title := markup.Find("div.lumen-tile__title > div").Text()
 
-	var effective_author string
-	if author_err != nil || author == nil {
-		fmt.Println("unknown author:", author_err, author, markup)
-		effective_author = "unknown"
-	} else {
-		effective_author = author.Data
+	if author == "" {
+		fmt.Println("unknown author:", author, markup)
+		author = "unknown"
 	}
 
 	var effective_title string
-	if title_err != nil || talk_title == nil {
+	if talk_title == "" {
 		// Hackery because a handful of talks have a slightly different html structure
-		talk_title, title_err = htmlquery.Query(markup, "//div[contains(@class, 'lumen-tile__title')]/text()")
-		if title_err != nil || talk_title == nil {
-			fmt.Println("unknown title:", title_err, talk_title, talk_link)
+		talk_title = markup.Find("div.lumen-tile__title").Text()
+		if talk_title == "" {
+			fmt.Println("unknown title:", talk_title, talk_link)
 			effective_title = "unknown"
 		}
-	} else {
-		effective_title = talk_title.Data
 	}
 
-	return Talk{effective_title, effective_author, talk_link, author_err}
+	return Talk{effective_title, author, talk_link, nil}
 }
 
 func addConferenceTalks(conf Conference, out chan<- Conference) {
-	doc, err := htmlquery.LoadURL(conf.Link)
-	if err != nil {
-		log.Println("err on conference page")
-		log.Println(err)
-	}
+	resp, err := http.Get(conf.Link)
+	quitOnErr(err, "err on conference page")
+	defer resp.Body.Close()
 
-	sessions_container, err := htmlquery.Query(doc, "//div[contains(@class,'section-wrapper')]")
-	quitOnErr(err, "Unable to find element expected to wrap all sessions")
-	session_markups, err := htmlquery.QueryAll(sessions_container, "//div[contains(@class,'section tile-wrapper')]")
-	quitOnErr(err, "Unable to find session div")
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	quitOnErr(err, "err on conference page")
 
-	for _, session_markup := range session_markups {
-		title, err := htmlquery.Query(session_markup, "//span[contains(@class,'section__header__title')]/text()")
-		talks_markup, err := htmlquery.QueryAll(session_markup, "//a[contains(@class,'lumen-tile__link')]")
+	doc.Find("div.section-wrapper div.section.tile-wrapper").Each(func(_ int, session_markup *goquery.Selection) {
+		// .Text()
+		title := session_markup.Find("span.section__header__title").Text()
 
 		var talks []Talk
-		for _, markup := range talks_markup {
-			talks = append(talks, summarizeTalk(markup))
-		}
-		conf.Sessions = append(conf.Sessions, Session{title.Data, talks, nil})
+		session_markup.Find("a.lumen-tile__link").Each(func(_ int, talk *goquery.Selection) {
+			talks = append(talks, summarizeTalk(talk))
+		})
+		conf.Sessions = append(conf.Sessions, Session{strings.TrimSpace(title), talks, nil})
 
 		if err != nil {
 			log.Println("session_title err")
 			log.Println(err)
 		}
-
-	}
+	})
 
 	out <- conf
 }
