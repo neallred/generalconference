@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/cheggaaa/pb/v3"
 )
 
 type Conference struct {
@@ -58,10 +59,11 @@ func Gather(stepLabel string) []Conference {
 	lenConferences := len(skeletonConferences)
 
 	chScoutConferences := make(chan Conference, lenConferences)
+	fmt.Printf("Locating talks for conferences:\n")
+	bar := pb.New(lenConferences).SetWidth(80)
+	bar.Start()
 
-	defer func() {
-		close(chScoutConferences)
-	}()
+	defer close(chScoutConferences)
 
 	for _, conf := range skeletonConferences {
 		conf := conf
@@ -70,10 +72,11 @@ func Gather(stepLabel string) []Conference {
 
 	var conferences []Conference
 	for i := 0; i < lenConferences; i++ {
-		fmt.Println("scout conf", i)
 		conf := <-chScoutConferences
 		conferences = append(conferences, conf)
+		bar.Increment()
 	}
+	bar.Finish()
 
 	return conferences
 }
@@ -101,14 +104,12 @@ func getConferences() []Conference {
 		}
 	})
 
-	fmt.Printf("Found %d conferences \n", len(conferences))
 	return conferences
 }
 
 func summarizeTalk(markup *goquery.Selection) Talk {
 	href, _ := markup.Attr("href")
 	talk_link := slugToUrl(href)
-
 	author := markup.Find("div.lumen-tile__content").Text()
 	talk_title := markup.Find("div.lumen-tile__title > div").Text()
 
@@ -117,17 +118,16 @@ func summarizeTalk(markup *goquery.Selection) Talk {
 		author = "unknown"
 	}
 
-	var effective_title string
 	if talk_title == "" {
 		// Hackery because a handful of talks have a slightly different html structure
 		talk_title = markup.Find("div.lumen-tile__title").Text()
 		if talk_title == "" {
 			fmt.Println("unknown title:", talk_title, talk_link)
-			effective_title = "unknown"
+			talk_title = "unknown"
 		}
 	}
 
-	return Talk{effective_title, author, talk_link, nil}
+	return Talk{talk_title, author, talk_link, nil}
 }
 
 func addConferenceTalks(conf Conference, out chan<- Conference) {
@@ -139,7 +139,6 @@ func addConferenceTalks(conf Conference, out chan<- Conference) {
 	quitOnErr(err, "err on conference page")
 
 	doc.Find("div.section-wrapper div.section.tile-wrapper").Each(func(_ int, session_markup *goquery.Selection) {
-		// .Text()
 		title := session_markup.Find("span.section__header__title").Text()
 
 		var talks []Talk

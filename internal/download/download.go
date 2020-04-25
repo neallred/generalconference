@@ -54,7 +54,7 @@ func getConferenceFolders(confLink string) (string, string, bool) {
 }
 
 func downloadTalk(link, filePath string, out chan<- struct{}) {
-	fmt.Println("dl", link)
+	// fmt.Println("dl", link)
 	resp, err := http.Get(link)
 	defer resp.Body.Close()
 	quitOnErr(err, "Unable to load talk "+link)
@@ -67,12 +67,12 @@ func downloadTalk(link, filePath string, out chan<- struct{}) {
 	out <- struct{}{}
 }
 
-func GetConference(conf scout.Conference, dlTarget string, out chan<- struct{}) {
+func GetConference(conf scout.Conference, dlTarget string, out chan<- int) {
 	talkCount := 0
 	for _, sess := range conf.Sessions {
 		talkCount += len(sess.Talks)
 	}
-	chDownloadTalks := make(chan struct{}, 50)
+	chDownloadTalks := make(chan struct{}, 100)
 
 	// bootstrap year and month folders
 	confLink := conf.Link
@@ -98,5 +98,5 @@ func GetConference(conf scout.Conference, dlTarget string, out chan<- struct{}) 
 		<-chDownloadTalks
 	}
 
-	out <- struct{}{}
+	out <- talkCount
 }
