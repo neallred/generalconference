@@ -54,10 +54,9 @@ func getConferenceFolders(confLink string) (string, string, bool) {
 }
 
 func downloadTalk(link, filePath string, out chan<- struct{}) {
-	// fmt.Println("dl", link)
 	resp, err := http.Get(link)
-	defer resp.Body.Close()
 	quitOnErr(err, "Unable to load talk "+link)
+	defer resp.Body.Close()
 	goqueryDoc, err := goquery.NewDocumentFromReader(resp.Body)
 	quitOnErr(err, "Unable to load document "+link)
 	article := goqueryDoc.Find("article")
