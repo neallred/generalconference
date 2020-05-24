@@ -53,14 +53,23 @@ func getConferenceFolders(confLink string) (string, string, bool) {
 	return yr, mth, ok
 }
 
+const SEP = "\n\n"
+
 func downloadTalk(link, filePath string, out chan<- struct{}) {
+	articleText := ""
 	resp, err := http.Get(link)
 	quitOnErr(err, "Unable to load talk "+link)
 	defer resp.Body.Close()
 	goqueryDoc, err := goquery.NewDocumentFromReader(resp.Body)
 	quitOnErr(err, "Unable to load document "+link)
 	article := goqueryDoc.Find("article")
-	articleText := article.Contents().Text()
+	header := article.Find("header")
+	paragraphs := goqueryDoc.Find("div.body-block p").Nodes
+	articleText += header.Contents().Text()
+	for _, p := range paragraphs {
+		articleText += (SEP + goquery.NewDocumentFromNode(p).Contents().Text())
+	}
+
 	err = ioutil.WriteFile(filePath, []byte(articleText), 0644)
 	quitOnErr(err, "unable to write talk")
 	out <- struct{}{}
